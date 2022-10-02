@@ -23,15 +23,13 @@ along with Hentai@Home.  If not, see <http://www.gnu.org/licenses/>.
 
 /*
 
-1.5.4 - 2019-12-18
+1.6.0
 
-This update fixes the CA issue that required reverting to 1.4.2, by changing the CA and replacing the issuing method with an actual secure one. Note that older 1.5 releases cannot be used, 1.5.4 is required.
+This is a required update for clients running versions prior to 1.5.4. 1.4 clients will be seeing dropping quality over the next month, and will no longer receive traffic after February 1st. This release only has minor changes compared to 1.5.4, which remains a supported version and will not require an upgrade.
 
-- H@H now uses individually issued certificates signed by Let's Encrypt. Modern browsers/OSes should all support this CA. YMMV for EOL ones.
+- When refreshing HTTPS certs, the client will now wait longer (up to five minutes) before it attempts starting the server back up if the listening thread takes unexpectedly long to terminate.
 
-- While the backend is still HTTP and the certificate file itself is still downloaded in plaintext, the private key is now encrypted with a shared secret, specifically the client's key.
-
-- When the client certificate is close to expiring, the client will now automatically request a new certificate and reinitialize the HTTP server.
+- When handling file requests, cache misses did not count towards the "total files sent" stat. (This only affected the readout in the GUI, server-side stats are not calculated by the clients.)
 
 
 [b]To update an existing client: shut it down, download [url=https://repo.e-hentai.org/hath/HentaiAtHome_1.5.4.zip]Hentai@Home 1.5.4[/url], extract the archive, copy the jar files over the existing ones, then restart the client.[/b]
@@ -224,7 +222,15 @@ public class HentaiAtHomeClient implements Runnable {
 						try {
 							myThread.sleep(5000);
 							httpServerShutdown(true);
-							myThread.sleep(10000);
+
+							int restartTimeout = 0;
+							
+							do {
+								Out.info("Waiting for HTTPServer thread to fully terminate..." + (restartTimeout > 1 ? " (waited " + (restartTimeout * 5) + " seconds)" : ""));
+								myThread.sleep(5000);
+							} while(!httpServer.isThreadTerminated() && ++restartTimeout < 60);
+							
+							myThread.sleep(1000);
 						} catch(java.lang.InterruptedException e) {}
 
 						httpServer = new HTTPServer(this);

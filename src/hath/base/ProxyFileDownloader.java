@@ -237,6 +237,7 @@ public class ProxyFileDownloader implements Runnable {
 	}
 
 	public void proxyThreadCompleted() {
+		Stats.fileSent();
 		proxyThreadComplete = true;
 		checkFinalizeDownloadedFile();
 	}

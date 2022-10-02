@@ -48,7 +48,7 @@ public class HTTPServer implements Runnable {
 	private Thread myThread = null;
 	private List<HTTPSession> sessions;
 	private int sessionCount = 0, currentConnId = 0;
-	private boolean allowNormalConnections = false, isRestarting = false;
+	private boolean allowNormalConnections = false, isRestarting = false, isTerminated = false;
 	private Hashtable<String,FloodControlEntry> floodControlTable;
 	private Pattern localNetworkPattern;
 
@@ -276,6 +276,12 @@ public class HTTPServer implements Runnable {
 
 			listener = null;
 		}
+		
+		isTerminated = true;
+	}
+	
+	public boolean isThreadTerminated() {
+		return isTerminated;
 	}
 
 	private synchronized int getNewConnId() {
