@@ -49,7 +49,6 @@ public abstract class HTTPResponseProcessor {
 	}
 
 	public void addHeaderField(String name, String value) {
-		// TODO: encode the value if needed.
 		this.header += name + ": " + value + "\r\n";
 	}
 	

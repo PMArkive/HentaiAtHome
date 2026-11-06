@@ -32,13 +32,13 @@ public class Settings {
 	public static final String NEWLINE = System.getProperty("line.separator");
 
 	// the client build is among other things used by the server to determine the client's capabilities. any forks should use the build number as an indication of compatibility with mainline, rather than an internal build number.
-	public static final int CLIENT_BUILD = 178;
+	public static final int CLIENT_BUILD = 181;
 	public static final int CLIENT_KEY_LENGTH = 20;
 	public static final int MAX_KEY_TIME_DRIFT = 300;
 	public static final int MAX_CONNECTION_BASE = 20;
 	public static final int TCP_PACKET_SIZE = 1460;
 
-	public static final String CLIENT_VERSION = "1.6.5";
+	public static final String CLIENT_VERSION = "1.6.6";
 	public static final String CLIENT_RPC_PROTOCOL = "http://";
 	public static final String CLIENT_RPC_HOST = "rpc.hentaiathome.net";
 	public static final String CLIENT_LOGIN_FILENAME = "client_login";
@@ -52,7 +52,7 @@ public class Settings {
 	private static String rpcServerCurrent = null, rpcServerLastFailed = null, imageProxyType = null, imageProxyHost = null;
 	private static Hashtable<String, Integer> staticRanges = null;
 	private static File datadir = null, logdir = null, cachedir = null, tempdir = null, downloaddir = null;
-	private static String clientKey = "", clientHost = "", dataDirPath = "data", logDirPath = "log", cacheDirPath = "cache", tempDirPath = "tmp", downloadDirPath = "download", rpcPath = "15/rpc?";
+	private static String clientKey = "", clientHost = "", dataDirPath = "data", logDirPath = "log", cacheDirPath = "cache", tempDirPath = "tmp", downloadDirPath = "download", rpcPath = "16/rpc?";
 
 	private static short rpcServerPort = 80;
 	private static int clientID = 0, clientPort = 0, throttle_bytes = 0, overrideConns = 0, serverTimeDelta = 0, maxAllowedFileSize = 1073741824, currentStaticRangeCount = 0, maxFilenameLength = 125, imageProxyPort = 0;

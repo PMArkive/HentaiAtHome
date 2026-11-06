@@ -112,7 +112,7 @@ public class CacheHandler {
 			if(cachedir.getFreeSpace() < Settings.getDiskLimitBytes() - getCacheSizeWithOverhead()) {
 				// note: if the client ends up being starved on disk space with static ranges assigned, it will cause a major loss of trust.
 				client.setFastShutdown();
-				client.dieWithError("The storage device does not have enough space available to hold the set cache size.\nFree up space for H@H, or reduce the cache size from the H@H settings page:\nhttps://e-hentai.org/hentaiathome.php?cid=" + Settings.getClientID());
+				client.dieWithError("The storage device does not have enough space available for the set maximum cache size.\nThe maximum cache size is set to " + Math.ceil(Settings.getDiskLimitBytes() / 1073741824) + " GiB, and the total disk space currently available for the cache is " + Math.floor((cachedir.getFreeSpace() + getCacheSizeWithOverhead()) / 1073741824) + " GiB.\nFree up space for H@H, or reduce the cache size from the H@H settings page:\nhttps://e-hentai.org/hentaiathome.php?cid=" + Settings.getClientID());
 			}
 			
 			if(cachedir.getFreeSpace() < cachedir.getTotalSpace() * 0.1) {

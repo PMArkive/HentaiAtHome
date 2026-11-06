@@ -24,6 +24,7 @@ along with Hentai@Home.  If not, see <https://www.gnu.org/licenses/>.
 package hath.base;
 
 import java.lang.Thread;
+import java.lang.StringBuilder;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Hashtable;
@@ -39,7 +40,7 @@ public class GalleryDownloader implements Runnable {
 	protected HTTPBandwidthMonitor downloadLimiter;
 	private boolean downloadsAvailable = true, pendingDownload = false, markDownloaded = false;
 	
-	private String title, information;
+	private String title, information, dlhash;
 	private GalleryFile[] galleryFiles;
 	private List<String> failures;
 	protected int gid, filecount;
@@ -159,7 +160,7 @@ public class GalleryDownloader implements Runnable {
 		URL metaurl;
 		
 		try {
-			metaurl = new URL(Settings.CLIENT_RPC_PROTOCOL + Settings.getRPCServerHost() + "/15/dl?" + ServerHandler.getURLQueryString("fetchqueue", markDownloaded ? gid + ";" + minxres : ""));
+			metaurl = new URL(Settings.CLIENT_RPC_PROTOCOL + Settings.getRPCServerHost() + "/16/dl?" + ServerHandler.getURLQueryString("fetchqueue", markDownloaded ? gid + ";" + minxres : ""));
 		}
 		catch(java.net.MalformedURLException e) {
 			e.printStackTrace();
@@ -191,6 +192,7 @@ public class GalleryDownloader implements Runnable {
 		minxres = null;
 		title = null;
 		information = "";
+		dlhash = null;
 		galleryFiles = null;
 		todir = null;
 		markDownloaded = false;
@@ -199,6 +201,10 @@ public class GalleryDownloader implements Runnable {
 		// parse the metadata for this gallery. this is basically a hathdl file with a new file list format
 		// incidentally, did you know Java SE does not have a built-in JSON parser? how stupid is that
 		int parseState = 0;
+
+		// to validate that the filelist is intact, the server returns a hash of the client's secret key concatenated with the list of files to be downloaded
+		StringBuilder checkedList = new StringBuilder();
+		checkedList.append(Settings.getClientKey());
 
 		try {
 			for(String s: galleryMeta.split("\n")) {
@@ -235,6 +241,15 @@ public class GalleryDownloader implements Runnable {
 						}
 						else {
 							throw new Exception("Encountered invalid minxres");
+						}
+					}
+					else if(split[0].equals("DLHASH")) {
+						if(Pattern.matches("^[a-f0-9]{40}$", split[1])) {
+							dlhash = split[1];
+							Out.debug("GalleryDownloader: Parsed dlhash=" + dlhash);
+						}
+						else {
+							throw new Exception("Encountered invalid dlhash");
 						}
 					}
 					else if(split[0].equals("TITLE")) {
@@ -287,17 +302,28 @@ public class GalleryDownloader implements Runnable {
 				}
 				else if(parseState == 1) {
 					// entries are on the form: page fileindex xres sha1hash filetype filename
+					checkedList.append("\n" + s);
 					String[] split = s.split(" ", 6);
 					int page = Integer.parseInt(split[0]);
 					int fileindex = Integer.parseInt(split[1]);
 					String xres = split[2];
-					
+
 					// sha1hash can be "unknown" if the file has not been generated yet
 					String sha1hash = split[3].equals("unknown") ? null : split[3];
-					
-					// the server guarantees that all filenames in the meta file are unique, and that none of them are reserved device filenames
+
+					// the server checks that all filenames in the meta file are unique, and that none of them are reserved device filenames
 					String filetype = split[4];
 					String filename = split[5];
+
+					if(!Pattern.matches("^[a-zA-Z0-9._-]{1,250}$", filename) || filename.contains("..")) {
+						Out.warning("GalleryDownloader: Invalid filename for page=" + page);
+						return false;
+					}
+
+					if(!Pattern.matches("^(jpg|gif|png|webp)$", filetype)) {
+						Out.warning("GalleryDownloader: Invalid filetype for page=" + page);
+						return false;
+					}
 
 					GalleryFile gf = new GalleryFile(page, fileindex, xres, sha1hash, filetype, filename);
 
@@ -314,6 +340,14 @@ public class GalleryDownloader implements Runnable {
 		catch(Exception e) {
 			Out.warning("GalleryDownloader: Failed to parse metadata for new gallery");
 			e.printStackTrace();
+			return false;
+		}
+
+		// ensure that the provided file list has not been tampered with before we actually download anything
+		String checkedHash = Tools.getSHA1String(checkedList.toString());
+
+		if(dlhash == null || !checkedHash.equals(dlhash)) {
+			Out.warning("GalleryDownloader: Aborted download; checkedHash=" + checkedHash + " does not match expected dlhash=" + dlhash);
 			return false;
 		}
 
@@ -340,7 +374,7 @@ public class GalleryDownloader implements Runnable {
 		private int fileretry = 0;
 		private boolean fileComplete = false;
 
-		public GalleryFile(int page, int fileindex, String xres, String expectedSHA1Hash, String filetype, String filename) {
+		public GalleryFile(int page, int fileindex, String xres, String expectedSHA1Hash, String filetype, String filename) throws Exception {
 			this.page = page;
 			this.fileindex = fileindex;
 			this.xres = xres;
@@ -348,6 +382,11 @@ public class GalleryDownloader implements Runnable {
 			this.filetype = filetype;
 			this.filename = filename;
 			tofile = new File(todir, filename + "." + filetype);
+
+			// check for directory traversal
+			if(!tofile.getParentFile().equals(todir)) {
+				throw new Exception("GalleryDownloader: Attempted creating file " + tofile + " outside of its parent directory");
+			}
 		}
 
 		public int download() {
@@ -388,7 +427,13 @@ public class GalleryDownloader implements Runnable {
 			// we don't have enough information at this point to initiate a ProxyFileDownload directly, so while the extra roundtrip might seem wasteful, it is necessary (and usually fairly rare)
 			URL source = client.getServerHandler().getDownloaderFetchURL(gid, page, fileindex, xres, ++fileretry);
 
-			if(source != null) {
+			if(source == null) {
+				Out.warning("Failed to fetch source URL for page=" + page);
+			}
+			else if(!source.toString().startsWith("http://") && !source.toString().startsWith("https://")) {
+				Out.warning("Invalid protocol for source URL for page=" + page);
+			}
+			else {
 				try {
 					FileDownloader dler = new FileDownloader(source, 10000, 300000, tofile.toPath(), fileretry > 1);
 					dler.setDownloadLimiter(downloadLimiter);

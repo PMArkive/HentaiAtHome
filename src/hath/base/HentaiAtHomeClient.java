@@ -23,22 +23,37 @@ along with Hentai@Home.  If not, see <https://www.gnu.org/licenses/>.
 
 /*
 
-1.6.5
+1.6.6 [SECURITY, IMPORTANT]
 
-- Improved handling of removed static ranges; if the last file is pruned from a range directory, the directory is now deleted and the entry is removed from the internal age cache. We also no longer force a rescan if there are fewer server-side ranges than we have cached. This should help prevent unnecessary startup rescans.
+- Corrected a missing directory-traversal check in the H@H Gallery Downloader code that could potentially have allowed the server to tell the client to overwrite any file that was write-accessible for the user H@H was running as with an arbitrary file, by injecting a file path as a filename in the gallery meta file. This breaks the fundamental H@H security principle where the server is never supposed to be able to tell the client to do anything dangerous.
 
-- When pruning files from the cache, if pruning a directory took a long time, we could end up stalling the main thread for long enough that the client would temporarily go offline. The cache pruner now runs in a separate thread to prevent this.
+Under some hypothetical and unlikely circumstances, this could have been leveraged by a MitM to do the same thing. Specifically, a malicious party would have had to be in a position to intercept and alter data received from the server, and the client's owner must have actively requested a gallery download via the site at the same time.
 
-- When the maximum cache size has been decreased and the current cache is larger than the new limit, we no longer wait for the cache prune to finish before we start the client; instead we run the pruner aggressively while the client is live until we reach the target size.
+There was no way for a MitM to activate the download mechanism independently, as there is no way to start the downloader unless the server explicitly sends a "start the downloader" command to the client - this command cannot be forged unless the client's secret key has been leaked. There are no indicators that this has ever been exploited.
 
-- Added a delay between each file deletion when pruning the cache to help mitigate disk activity bursts observed on HDDs with Windows filesystems when there are many files in a directory.
+While the activation of the H@H Downloader mechanism has been disabled server-side for any client running versions prior to this update, [b]the potential for the server to activate and exploit this mechanism remains until the client is updated[/b]. As such, we recommend updating as soon as possible, even if you do not use the H@H Downloader.
 
-- We now print a warning at startup if the storage device used for the cache has less than 10% free space. For HDDs, some free space is necessary to prevent excessive file fragmentation and to allow file defragmentation to run properly. The warning can be disregarded if the cache is stored on an SSD, where file fragmentation is a non-issue.
+Due to the security implications, this update will be made mandatory unless any issues are discovered shortly after release.
+
+Thanks to oOoEstheiM for privately reporting this issue.
 
 
-[b]To update an existing client: shut it down, download [url=https://repo.e-hentai.org/hath/HentaiAtHome_1.6.5.zip]Hentai@Home 1.6.5[/url], extract the archive, copy the jar files over the existing ones, then restart the client.[/b]
+- Added a signature to RPC responses to detect and reject alterations in general. (This prevents a MitM from interfering with other client operations, but is considered hardening, as it was found to have no significant security impact since H@H was designed not to trust the server in the first place.)
 
-[b]The full source code for H@H is available and licensed under the GNU General Public License v3, and can be downloaded [url=https://repo.e-hentai.org/hath/HentaiAtHome_1.6.5_src.zip]here[/url]. Building it from source only requires OpenJDK 8 or newer.[/b]
+- Added a signature to the gallery downloader meta files to detect and reject altered file lists.
+
+- Added additional hardening to ensure that filenames and filetypes provided to the downloader can only correspond to those that are allowed in the gallery system.
+
+- Since the file hash is not always known when requesting resampled images via the H@H Downloader, and these requests are not latency-sensitive, these file downloads now always use HTTPS. Note that this is not necessary elsewhere, since the hash is otherwise always known, and the file can therefore be verified regardless of transport.
+
+- If we bail out on startup because the available disk space is less than the assigned cache size, we now explicitly print both the required and actual available space.
+
+- The client will now properly handle the FAIL_STARTUP_LOOP and FAIL_UNSUPPORTED_LOCATION startup codes, instead of failing back to re-request the ID and key.
+
+
+[b]To update an existing client: shut it down, download [url=https://upld.e-hentai.org/hath/HentaiAtHome_1.6.6.zip]Hentai@Home 1.6.6[/url], extract the archive, copy the jar files over the existing ones, then restart the client.[/b]
+
+[b]The full source code for H@H is available and licensed under the GNU General Public License v3, and can be downloaded [url=https://upld.e-hentai.org/hath/HentaiAtHome_1.6.6_src.zip]here[/url]. Building it from source only requires OpenJDK 8 or newer.[/b]
 
 [b]For information on how to join Hentai@Home, check out [url=https://forums.e-hentai.org/index.php?showtopic=19795]The Hentai@Home Project FAQ[/url].[/b]
 

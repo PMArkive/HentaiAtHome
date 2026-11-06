@@ -74,29 +74,43 @@ public class ServerResponse {
 		else if(split[0].startsWith("TEMPORARILY_UNAVAILABLE")) {
 			return new ServerResponse(RESPONSE_STATUS_NULL, "TEMPORARILY_UNAVAILABLE", serverConnectionURL.getHost().toLowerCase());
 		}
-		else if(split[0].equals("OK")) {
-			return new ServerResponse(RESPONSE_STATUS_OK, Arrays.copyOfRange(split, 1, split.length));
+		else if(split[0].startsWith("OK-")) {
+			String[] validatedHeader = split[0].split("-");
+
+			// we don't actually check the responseTime, it's just a vary
+			int responseTime = Integer.parseInt(validatedHeader[1]);
+			String expectedResponseHash = validatedHeader[2];
+
+			// verify that this response is actually from the server. since the provided hash includes the client's secret key, it cannot be MitM'd
+			StringBuilder checkedResponse = new StringBuilder();
+			checkedResponse.append(responseTime + "-" + Settings.getClientKey());
+
+			// the hash in the first line also validates the rest of the response, if any
+			for(int i = 1; i < split.length; i++) {
+				checkedResponse.append("\n" + split[i]);
+			}
+
+			String checkedHash = Tools.getSHA1String(checkedResponse.toString());
+
+			if(checkedHash.equals(expectedResponseHash)) {
+				return new ServerResponse(RESPONSE_STATUS_OK, Arrays.copyOfRange(split, 1, split.length));
+			}
+			else {
+				Out.warning("Received an invalid response hash from the server");				
+				return new ServerResponse(RESPONSE_STATUS_FAIL, "RESPONSE_HASH_FAILED", serverConnectionURL.getHost().toLowerCase());
+			}
 		}
 		else if(split[0].equals("KEY_EXPIRED") && retryhandler != null && retryact != null) {
 			Out.warning("Server reported expired key; attempting to refresh time from server and retrying");
 			retryhandler.refreshServerStat();
 			return getServerResponse(ServerHandler.getServerConnectionURL(retryact), null);
 		}
-		else {
-			return new ServerResponse(RESPONSE_STATUS_FAIL, split[0], serverConnectionURL.getHost().toLowerCase());
-		}
+
+		return new ServerResponse(RESPONSE_STATUS_FAIL, split[0], serverConnectionURL.getHost().toLowerCase());
 	}
 
 	public String toString() {
-		java.lang.StringBuffer sb = new java.lang.StringBuffer();
-
-		if(responseText != null) {
-			for(String s : responseText) {
-				sb.append(s + ",");
-			}
-		}
-
-		return "ServerResponse {responseStatus=" + responseStatus + ", responseText=" + sb.toString() + ", failCode=" + failCode + "}";
+		return "ServerResponse {responseStatus=" + responseStatus + ", responseText=" + getResponseString() + ", failCode=" + failCode + "}";
 	}
 
 	public int getResponseStatus() {
@@ -105,6 +119,18 @@ public class ServerResponse {
 
 	public String[] getResponseText() {
 		return responseText;
+	}
+
+	public String getResponseString() {
+		java.lang.StringBuffer sb = new java.lang.StringBuffer();
+
+		if(responseText != null) {
+			for(String s : responseText) {
+				sb.append(s + ",");
+			}
+		}
+		
+		return sb.toString();
 	}
 
 	public String getFailCode() {

@@ -62,12 +62,7 @@ public class ServerHandler {
 		URL serverConnectionURL = null;
 
 		try {
-			if(act.equals(ACT_SERVER_STAT)) {
-				serverConnectionURL = new URL(Settings.CLIENT_RPC_PROTOCOL + Settings.getRPCServerHost() + "/" + Settings.getRPCPath() + "clientbuild=" + Settings.CLIENT_BUILD + "&act=" + act);
-			}
-			else {
-				serverConnectionURL = new URL(Settings.CLIENT_RPC_PROTOCOL + Settings.getRPCServerHost() + "/" + Settings.getRPCPath() + getURLQueryString(act, add));
-			}
+			serverConnectionURL = new URL(Settings.CLIENT_RPC_PROTOCOL + Settings.getRPCServerHost() + "/" + Settings.getRPCPath() + getURLQueryString(act, add));
 		} catch(java.net.MalformedURLException e) {
 			HentaiAtHomeClient.dieWithError(e);
 		}
@@ -219,9 +214,19 @@ public class ServerHandler {
 		Out.info("Connecting to the Hentai@Home Server to register client with ID " + Settings.getClientID() + "...");
 
 		try {
+			boolean failedInitial = false;
+			
 			do {
 				if(!refreshServerStat()) {
-					HentaiAtHomeClient.dieWithError("Failed to get initial stat from server.");
+					if(failedInitial) {
+						HentaiAtHomeClient.dieWithError("Failed to get initial stats from server.");
+					}
+					else {
+						failedInitial = true;
+						Out.warning("\nAuthentication failed; please re-enter your Client ID and Key");
+						Settings.promptForIDAndKey(client.getInputQueryHandler());
+						continue;
+					}
 				}
 
 				Out.info("Reading Hentai@Home client settings from server...");
@@ -236,8 +241,30 @@ public class ServerHandler {
 				else if(sr.getResponseStatus() == ServerResponse.RESPONSE_STATUS_NULL) {
 					HentaiAtHomeClient.dieWithError("Failed to get a login response from server.");
 				}
+				else if(sr.getFailCode().startsWith("FAIL_STARTUP_LOOP")) {
+					Out.info("");
+					Out.info("************************************************************************************************************************************");
+					Out.info("The server detected that the client is stuck in a startup loop, and has blocked it for 15 minutes.");
+					Out.info("Fix whatever is preventing the client from starting, and try again in a bit.");
+					Out.info("The program will now terminate.");
+					Out.info("************************************************************************************************************************************");
+					Out.info("");
+
+					client.dieWithError("The client has failed too many recent startup attempts; wait 15 minutes and try again.");
+				}
+				else if(sr.getFailCode().startsWith("FAIL_UNSUPPORTED_LOCATION")) {
+					Out.info("");
+					Out.info("************************************************************************************************************************************");
+					Out.info("The server detected that the client is located in a country that H@H does not support.");
+					Out.info(sr.getResponseString());
+					Out.info("The program will now terminate.");
+					Out.info("************************************************************************************************************************************");
+					Out.info("");
+
+					client.dieWithError("The client appears to be located in a country that H@H does not support.");
+				}
 				else {
-					Out.warning("\nAuthentication failed, please re-enter your Client ID and Key (Code: " + sr.getFailCode() + ")");
+					Out.warning("\nAuthentication failed; please re-enter your Client ID and Key (Code: " + sr.getFailCode() + ")");
 					Settings.promptForIDAndKey(client.getInputQueryHandler());
 				}
 			} while(!loginValidated);
