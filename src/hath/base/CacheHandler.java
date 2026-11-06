@@ -1,6 +1,6 @@
 /*
 
-Copyright 2008-2024 E-Hentai.org
+Copyright 2008-2026 E-Hentai.org
 https://forums.e-hentai.org/
 tenboro@e-hentai.org
 
@@ -41,9 +41,10 @@ public class CacheHandler {
 	private HentaiAtHomeClient client = null;
 	private File cachedir = null;
 	private short[] lruCacheTable = null;
-	private int cacheCount = 0, lruClearPointer = 0, lruSkipCheckCycle = 0, pruneAggression = 1;
+	private int cacheCount = 0, lruClearPointer = 0;
 	private long cacheSize = 0, lastFileVerification = 0;
 	private boolean cacheLoaded = false;
+	private CachePruner cachePruner = null;
 
 	public CacheHandler(HentaiAtHomeClient client) throws java.io.IOException {
 		this.client = client;
@@ -107,10 +108,16 @@ public class CacheHandler {
 			System.gc();
 		}
 
-		if(!recheckFreeDiskSpace()) {
-			// note: if the client ends up being starved on disk space with static ranges assigned, it will cause a major loss of trust.
-			client.setFastShutdown();
-			client.dieWithError("The storage device does not have enough space available to hold the given cache size.\nFree up space for H@H, or reduce the cache size from the H@H settings page:\nhttps://e-hentai.org/hentaiathome.php?cid=" + Settings.getClientID());
+		if(!Settings.isSkipFreeSpaceCheck()) { 
+			if(cachedir.getFreeSpace() < Settings.getDiskLimitBytes() - getCacheSizeWithOverhead()) {
+				// note: if the client ends up being starved on disk space with static ranges assigned, it will cause a major loss of trust.
+				client.setFastShutdown();
+				client.dieWithError("The storage device does not have enough space available to hold the set cache size.\nFree up space for H@H, or reduce the cache size from the H@H settings page:\nhttps://e-hentai.org/hentaiathome.php?cid=" + Settings.getClientID());
+			}
+			
+			if(cachedir.getFreeSpace() < cachedir.getTotalSpace() * 0.1) {
+				Out.info("WARNING: The storage device used for the cache has less than 10% free space. This is fine for SSDs, but if this is a HDD, 10-15% free space is necessary to avoid file fragmentation issues.");
+			}
 		}
 
 		if(cacheCount < 1 && Settings.getStaticRangeCount() > 20) {
@@ -119,25 +126,7 @@ public class CacheHandler {
 			client.dieWithError("This client has static ranges assigned to it, but the cache is empty. Check file permissions and file system integrity.\nIf the cache has been deleted or is otherwise lost, you have to manually reset your static ranges from the H@H settings page.\nhttps://e-hentai.org/hentaiathome.php?cid=" + Settings.getClientID());
 		}
 
-		long cacheLimit = Settings.getDiskLimitBytes();
-
-		if(getCacheSizeWithOverhead() > cacheLimit) {
-			Out.info("CacheHandler: We are over the cache limit, pruning until the limit is met");
-			int iterations = 0;
-			java.text.DecimalFormat f = new java.text.DecimalFormat("###.00");
-
-			while(getCacheSizeWithOverhead() > cacheLimit) {
-				if(iterations++ % 100 == 0) {
-					Out.info("CacheHandler: Cache is currently at " + f.format(100.0 * getCacheSizeWithOverhead() / cacheLimit) + "%");
-				}
-
-				recheckFreeDiskSpace();
-				System.gc();
-			}
-
-			Out.info("CacheHandler: Finished startup cache pruning");
-		}
-
+		cachePruner = new CachePruner(this, client);
 		cacheLoaded = true;
 	}
 
@@ -212,19 +201,13 @@ public class CacheHandler {
 				Out.info("CacheHandler: All persistent fields found, loading remaining objects");
 
 				staticRangeOldest = (Hashtable<String,Long>) readCacheObject(getPersistentAgesFile(), agesHash);
+				Out.info("CacheHandler: Loaded static range ages");
 
-				if(staticRangeOldest.size() > Settings.getStaticRangeCount()) {
-					Out.info("CacheHandler: The count of cached static range ages is higher than the current static range count; forcing rescan to prevent orphaned ranges");
-				}
-				else {
-					Out.info("CacheHandler: Loaded static range ages");
+				lruCacheTable = (short[]) readCacheObject(getPersistentLRUFile(), lruHash);
+				Out.info("CacheHandler: Loaded LRU cache");
 
-					lruCacheTable = (short[]) readCacheObject(getPersistentLRUFile(), lruHash);
-					Out.info("CacheHandler: Loaded LRU cache");
-
-					updateStats();
-					success = true;
-				}
+				updateStats();
+				success = true;
 			}
 		}
 		catch(Exception e) {
@@ -496,30 +479,27 @@ public class CacheHandler {
 		updateStats();
 	}
 
-	private long getCacheSizeWithOverhead() {
+	public long getCacheSizeWithOverhead() {
 		// on average, a file will have a wasted slack space (filesystem overhead) of half the blocksize of the storage device. this is assumed to be 4096 bytes but can be overriden with --filesystem-blocksize
 		// we *could* calculate this exactly but this would require additional logic and a cache rescan if the filesystem changes; this is very much close enough
 		// Java 9 has a way to determine the blocksize from the storage device automatically, but we do not want to bump the required version just for this
 		return cacheSize + cacheCount * Settings.getFileSystemBlockSize() / 2;
 	}
 
-	public boolean recheckFreeDiskSpace() {
-		if(lruSkipCheckCycle > 0) {
-			// this is called every 10 seconds from the main thread, but depending on what happened in earlier runs, we skip checks when they are not necessary
-			// we'll check every 10 minutes if the free cache during the last run was over 1GB, and every minute if less than 1GB but over 100MB
-			--lruSkipCheckCycle;
-			return true;
-		}
-
+	public void checkAndPruneCache() {
 		long wantFree = 104857600;
 		long cacheLimit = Settings.getDiskLimitBytes();
 		long cacheSizeWithOverhead = getCacheSizeWithOverhead();
 		long bytesToFree = 0;
+		boolean fastDelete = false;
 
 		if(cacheSizeWithOverhead > cacheLimit) {
+			// the cache (with overhead) is larger than the limit
 			bytesToFree = wantFree + cacheSizeWithOverhead - cacheLimit;
+			fastDelete = true;
 		}
 		else if(cacheLimit - cacheSizeWithOverhead < wantFree) {
+			// there is less than 100 MiB available cache space
 			bytesToFree = wantFree - (cacheLimit - cacheSizeWithOverhead);
 		}
 
@@ -543,7 +523,7 @@ public class CacheHandler {
 
 			if(pruneStaticRange == null) {
 				Out.warning("CacheHandler: Failed to find aged static range to prune (oldestRangeAge=" + oldestRangeAge + ")");
-				return false;
+				return;
 			}
 
 			File staticRangeDir = new File(cachedir, pruneStaticRange.substring(0, 2) + "/" + pruneStaticRange.substring(2, 4) + "/");
@@ -569,19 +549,24 @@ public class CacheHandler {
 			Out.debug("CacheHandler: Trying to free " + bytesToFree + " bytes, currently scanning range " + pruneStaticRange);
 
 			if(!staticRangeDir.isDirectory()) {
-				Out.warning("CacheHandler: Expected static range directory " + staticRangeDir + " could not be accessed.");
-
-				// we need to update this, or we will loop forever trying to access this directory
-				staticRangeOldest.put(pruneStaticRange, lruLastModifiedPruneCutoff);
+				// we need to remove this, or we will loop forever trying to access this directory
+				staticRangeOldest.remove(pruneStaticRange);
+				Out.warning("CacheHandler: Removed age cache for missing static range directory " + staticRangeDir);
 			}
 			else {
 				File[] files = staticRangeDir.listFiles();
 				long oldestLastModified = nowtime;
+				int filecount = files != null ? files.length : 0;
 
-				if(files != null && files.length > 0) {
-					Out.debug("CacheHandler: Examining " + files.length + " files with lruLastModifiedPruneCutoff=" + lruLastModifiedPruneCutoff);
+				if(filecount > 0) {
+					Out.debug("CacheHandler: Examining " + filecount + " files with lruLastModifiedPruneCutoff=" + lruLastModifiedPruneCutoff);
 
 					for(File file : files) {
+						// this can potentially take a while, so check for shutdown between each file
+						if(client.isShuttingDown()) {
+							return;
+						}
+
 						long lastModified = file.lastModified();
 
 						if(lastModified < lruLastModifiedPruneCutoff) {
@@ -593,8 +578,13 @@ public class CacheHandler {
 							}
 							else {
 								deleteFileFromCache(toRemove);
-								bytesToFree -= toRemove.getSize();
-								Out.debug("CacheHandler: Pruned file had lastModified=" + lastModified + " size=" + toRemove.getSize() + " bytesToFree=" + bytesToFree + " cacheCount=" + cacheCount);
+								--filecount;
+								Out.debug("CacheHandler: Pruned file " + toRemove.getFileid() + " with lastModified=" + lastModified + " size=" + toRemove.getSize() + ", new cacheCount=" + cacheCount);
+								
+								try {
+									Thread.currentThread().sleep(fastDelete ? 100 : 1000);
+								}
+								catch(Exception e) {}
 							}
 						}
 						else {
@@ -603,42 +593,48 @@ public class CacheHandler {
 					}
 				}
 
-				// we don't have any guarantees that there were any files to prune in this directory since there is a chance the oldest file was accessed after the oldest timestamp record was updated
-				// regardless, we update the record with the freshly computed last modified timestamp. this will usually knock this range back from the front of the queue
-				// if we still need to prune files, we will do another pass shortly
-				staticRangeOldest.put(pruneStaticRange, oldestLastModified);
-
-				Out.debug("CacheHandler: Updated static range " + pruneStaticRange + " with new oldestLastModified=" + oldestLastModified);
+				if(filecount > 0) {
+					// we don't have any guarantees that there were any files to prune in this directory since there is a chance the oldest file was accessed after the oldest timestamp record was updated
+					// regardless, we update the record with the freshly computed last modified timestamp. this will usually knock this range back from the front of the queue
+					// if we still need to prune files, we will do another pass shortly
+					staticRangeOldest.put(pruneStaticRange, oldestLastModified);
+					Out.debug("CacheHandler: Updated age cache for static range " + pruneStaticRange + ", new oldestLastModified=" + oldestLastModified);
+				}
+				else {
+					// all files have been removed from this static range. delete the directory, and remove its entry from staticRangeOldest
+					staticRangeDir.delete();
+					staticRangeOldest.remove(pruneStaticRange);
+					Out.debug("CacheHandler: Removed age cache for empty static range directory " + pruneStaticRange);
+				}
 			}
+
+			cachePruner.setCheckFrequency(0);
+		}
+		else if(cacheLimit - cacheSizeWithOverhead > wantFree * 10) {
+			cachePruner.setCheckFrequency(600);
+		}
+		else if(cacheLimit - cacheSizeWithOverhead > wantFree) {
+			cachePruner.setCheckFrequency(60);
 		}
 		else {
-			lruSkipCheckCycle = cacheLimit - cacheSizeWithOverhead > wantFree * 10 ? 60 : 6;
-		}
-
-		// if we are more than 10MB above where we want to be, start turning up the prune aggression, which determines how many times this cleanup function is run per cycle
-		// realistically, this is almost certainly unnecessary since the 1.3.2 pruner was added, but it doesn't hurt to have it just in case
-		pruneAggression = bytesToFree > 10485760 ? (int) (bytesToFree / 10485760) : 1;
-
-		if(Settings.isSkipFreeSpaceCheck()) {
-			Out.debug("CacheHandler: Disk free space check is disabled.");
-			return true;
-		}
-		else {
-			long diskFreeSpace = cachedir.getFreeSpace();
-
-			if(diskFreeSpace < Math.max(Settings.getDiskMinRemainingBytes(), wantFree)) {
-				Out.warning("CacheHandler: Did not meet space constraints: Disk free space limit reached (" + diskFreeSpace + " bytes free on device)");
-				return false;
-			}
-			else {
-				Out.debug("CacheHandler: Disk space constraints met (" + diskFreeSpace + " bytes free on device)");
-				return true;
-			}
+			cachePruner.setCheckFrequency(10);
 		}
 	}
 
-	public int getPruneAggression() {
-		return pruneAggression;
+	public boolean hasFreeDiskSpace() {
+		if(Settings.isSkipFreeSpaceCheck()) {
+			return true;
+		}
+
+		long diskFreeSpace = cachedir.getFreeSpace();
+
+		if(diskFreeSpace < Math.max(Settings.getDiskMinRemainingBytes(), 104857600)) {
+			Out.warning("CacheHandler: Minimum free disk space limit reached (" + diskFreeSpace + " bytes free on device)");
+			return false;
+		}
+
+		Out.debug("CacheHandler: Disk space constraints met (" + diskFreeSpace + " bytes free on device)");
+		return true;
 	}
 
 	public void processBlacklist(long deltatime) {
@@ -708,7 +704,7 @@ public class CacheHandler {
 				--cacheCount;
 				cacheSize -= toRemove.getSize();
 				updateStats();
-				Out.debug("CacheHandler: Deleted cached file " + toRemove.getFileid());
+				//Out.debug("CacheHandler: Deleted cached file " + toRemove.getFileid());
 			}
 		}
 		catch(Exception e) {

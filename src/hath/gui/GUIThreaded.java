@@ -1,6 +1,6 @@
 /*
 
-Copyright 2008-2024 E-Hentai.org
+Copyright 2008-2026 E-Hentai.org
 https://forums.e-hentai.org/
 tenboro@e-hentai.org
 

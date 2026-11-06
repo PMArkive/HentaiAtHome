@@ -1,6 +1,6 @@
 /*
 
-Copyright 2008-2024 E-Hentai.org
+Copyright 2008-2026 E-Hentai.org
 https://forums.e-hentai.org/
 tenboro@e-hentai.org
 
@@ -23,30 +23,22 @@ along with Hentai@Home.  If not, see <https://www.gnu.org/licenses/>.
 
 /*
 
-1.6.4
+1.6.5
 
-- If the filesize of a cached file does not match the expected size, we now ignore it and perform a backend fetch instead.
+- Improved handling of removed static ranges; if the last file is pruned from a range directory, the directory is now deleted and the entry is removed from the internal age cache. We also no longer force a rescan if there are fewer server-side ranges than we have cached. This should help prevent unnecessary startup rescans.
 
-- To prevent long-term bitrot, we now occasionally verify the integrity of requested files as they are being served. This will check a particular file no more often than once per week, and it will check no more than one file every two seconds. This should cause no additional I/O or RAM usage, and should have negligble impact on CPU usage.
+- When pruning files from the cache, if pruning a directory took a long time, we could end up stalling the main thread for long enough that the client would temporarily go offline. The cache pruner now runs in a separate thread to prevent this.
 
-- CPU-starved clients can disable the verification checking by starting the client with --disable-file-verification, but note that if the monitoring system detects corrupted files in your cache, your client will be flagged for a full cache verification on next startup, which can take a long time.
+- When the maximum cache size has been decreased and the current cache is larger than the new limit, we no longer wait for the cache prune to finish before we start the client; instead we run the pruner aggressively while the client is live until we reach the target size.
 
-- Partially because of the new file integrity checking, the LRU cache table is now created even if --use-less-memory is used. This will increase the memory requirements in this mode by about 2 MB.
+- Added a delay between each file deletion when pruning the cache to help mitigate disk activity bursts observed on HDDs with Windows filesystems when there are many files in a directory.
 
-- Fixed an issue where if a directory chosen for cache pruning did not exist or was inaccessible (due to a file system or permission issue), the pruning mechanism would loop trying to prune said directory.
-
-- If the cached number of static ranges is higher than the number of static ranges returned by the server during startup, we now force a cache rescan to prevent files in removed ranges from clogging up the cache.
-
-- If a static range was removed, the range directory is now deleted on the first cache rescan. Previously it would delete the files, but leave the directory until the next rescan.
-
-- Re-enabled TLS 1.3, which among other things reduces the latency for establishing a HTTPS connection to the client. It was originally disabled due to a significantly higher failure rate compared to TLS 1.2 caused by broken proxies, filewalls and other network filtering devices, but since most things use it by now, those should not cause problems anymore.
-
-- TLS 1.0 and 1.1 were disabled as they are deprecated and insecure, with support being [url=https://techcommunity.microsoft.com/blog/windows-itpro-blog/tls-1-0-and-tls-1-1-soon-to-be-disabled-in-windows/3887947]dropped[/url] from modern operating systems. Everything that supports the current HTTPS certificate authority should also support TLS 1.2.
+- We now print a warning at startup if the storage device used for the cache has less than 10% free space. For HDDs, some free space is necessary to prevent excessive file fragmentation and to allow file defragmentation to run properly. The warning can be disregarded if the cache is stored on an SSD, where file fragmentation is a non-issue.
 
 
-[b]To update an existing client: shut it down, download [url=https://repo.e-hentai.org/hath/HentaiAtHome_1.6.4.zip]Hentai@Home 1.6.4[/url], extract the archive, copy the jar files over the existing ones, then restart the client.[/b]
+[b]To update an existing client: shut it down, download [url=https://repo.e-hentai.org/hath/HentaiAtHome_1.6.5.zip]Hentai@Home 1.6.5[/url], extract the archive, copy the jar files over the existing ones, then restart the client.[/b]
 
-[b]The full source code for H@H is available and licensed under the GNU General Public License v3, and can be downloaded [url=https://repo.e-hentai.org/hath/HentaiAtHome_1.6.3_src.zip]here[/url]. Building it from source only requires OpenJDK 8 or newer.[/b]
+[b]The full source code for H@H is available and licensed under the GNU General Public License v3, and can be downloaded [url=https://repo.e-hentai.org/hath/HentaiAtHome_1.6.5_src.zip]here[/url]. Building it from source only requires OpenJDK 8 or newer.[/b]
 
 [b]For information on how to join Hentai@Home, check out [url=https://forums.e-hentai.org/index.php?showtopic=19795]The Hentai@Home Project FAQ[/url].[/b]
 
@@ -105,7 +97,7 @@ public class HentaiAtHomeClient implements Runnable {
 
 		Out.startLoggers();
 		Out.info("Hentai@Home " + Settings.CLIENT_VERSION + " (Build " + Settings.CLIENT_BUILD + ") starting up\n");
-		Out.info("Copyright (c) 2008-2024, E-Hentai.org - all rights reserved.");
+		Out.info("Copyright (c) 2008-2026, E-Hentai.org - all rights reserved.");
 		Out.info("This software comes with ABSOLUTELY NO WARRANTY. This is free software, and you are welcome to modify and redistribute it under the GPL v3 license.\n");
 
 		Stats.resetStats();
@@ -300,15 +292,6 @@ public class HentaiAtHomeClient implements Runnable {
 
 				//Out.debug("Running Stats.shiftBytesSentHistory");
 				Stats.shiftBytesSentHistory();
-
-				//Out.debug("Running cacheHandler.recheckFreeDiskSpace");
-
-				for(int i = 0; i < cacheHandler.getPruneAggression(); i++) {				
-					if(!cacheHandler.recheckFreeDiskSpace()) {
-						// disk is full. time to shut down so we don't add to the damage.
-						dieWithError("The free disk space has dropped below the minimum allowed threshold. H@H cannot safely continue.\nFree up space for H@H, or reduce the cache size from the H@H settings page:\nhttps://e-hentai.org/hentaiathome.php?cid=" + Settings.getClientID());
-					}
-				}
 
 				System.gc();
 
